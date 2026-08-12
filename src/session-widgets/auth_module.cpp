@@ -3,12 +3,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "auth_module.h"
+#include "dconfig_helper.h"
 
 #include <DHiDPIHelper>
+#include <DDialogCloseButton>
+#include <DFloatingMessage>
+#include <DPushButton>
+#include <DMessageManager>
+#include <DPaletteHelper>
+#include <DPlatformWindowHandle>
 
 #include <QDateTime>
 #include <QTimer>
 #include <QtMath>
+#include <QMenu>
 
 void LimitsInfo::operator=(const LimitsInfo &info)
 {
@@ -183,4 +191,225 @@ void AuthModule::setAuthFactorType(AuthFactorType authFactorType)
 bool AuthModule::isLocked() const
 {
     return m_limitsInfo->locked;
+}
+
+void AuthModule::connectResetPasswordHelper(ResetPasswordHelper *helper)
+{
+    connect(helper, &ResetPasswordHelper::requestSecurityQuestionReset,
+            this, &AuthModule::onResetPasswordHelperRequestSecurityQuestionReset);
+    connect(helper, &ResetPasswordHelper::requestResetPasswordDialogStateChanged,
+            this, &AuthModule::onResetPasswordHelperRequestDialogStateChanged);
+    connect(helper, &ResetPasswordHelper::availableMethodsChanged,
+            this, &AuthModule::onResetPasswordHelperAvailableMethodsChanged);
+}
+
+void AuthModule::onResetPasswordHelperRequestSecurityQuestionReset()
+{
+    Q_EMIT requestSecurityQuestionReset();
+}
+
+void AuthModule::onResetPasswordHelperRequestDialogStateChanged(bool visible)
+{
+    m_resetPasswordMessageVisible = visible;
+    Q_EMIT requestResetPasswordDialogStateChanged(visible);
+}
+
+void AuthModule::onResetPasswordHelperAvailableMethodsChanged(int methods)
+{
+    // 延迟执行，避免信号同步传递导致的竞争
+    QTimer::singleShot(0, this, [this, methods] {
+        closeResetPasswordMessage();
+        if (methods != ResetPasswordHelper::NoResetMethod && m_resetPasswordMessageVisible) {
+            showResetPasswordMessage();
+        }
+    });
+}
+
+void AuthModule::resetPasswordCloseMessage()
+{
+    closeResetPasswordMessage();
+}
+
+void AuthModule::resetPasswordShowMessage(int methods)
+{
+    Q_UNUSED(methods)
+    showResetPasswordMessage();
+}
+
+void AuthModule::showResetPasswordMessage()
+{
+    // 缓存未就绪时等待异步预取完成（不阻塞 UI），由 availableMethodsChanged 驱动
+    if (!m_resetPasswordHelper->isMethodsCached()) {
+        return;
+    }
+    const int methods = m_resetPasswordHelper->cachedResetMethods();
+
+    if (m_resetPasswordFloatingMessage) {
+        m_resetPasswordFloatingMessage->show();
+        return;
+    }
+
+    QWidget *centerFrame = findResetPasswordCenterFrame();
+    if (!centerFrame) {
+        return;
+    }
+
+    QPalette pa;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    pa.setColor(QPalette::Window, QColor(247, 247, 247, 51));
+#else
+    pa.setColor(QPalette::Background, QColor(247, 247, 247, 51));
+#endif
+    pa.setColor(QPalette::Highlight, Qt::white);
+    pa.setColor(QPalette::HighlightedText, Qt::black);
+    m_resetPasswordFloatingMessage = new DFloatingMessage(DFloatingMessage::MessageType::ResidentType);
+    m_resetPasswordFloatingMessage->setAttribute(Qt::WA_DeleteOnClose, false);
+    m_resetPasswordFloatingMessage->setPalette(pa);
+    // DFloatingMessage 中未放开seticonsize接口，无法设置图标大小，使用缩放函数会造成图标锯齿
+    // 只能使用findChildren找到对应的图标控件来设置图标大小进行规避
+    // DFloatingMessage中有两个按钮一个是DIconButton,另一个是继承于DIconButton的DDialogCloseButton，需要区分
+    QList<DIconButton *> btnList = m_resetPasswordFloatingMessage->findChildren<DIconButton *>();
+    foreach (const auto iconButton, btnList) {
+        DDialogCloseButton *closeButton = qobject_cast<DDialogCloseButton *>(iconButton);
+        if (closeButton) {
+            continue;
+        }
+        iconButton->installEventFilter(this);
+        m_iconButton = iconButton;
+    }
+    m_resetPasswordFloatingMessage->setIcon(QIcon("://misc/images/dss_warning.svg"));
+    auto *resetBtn = new DPushButton(tr("Reset Password"));
+    // 纯白色背景 + 黑色字体
+    {
+        DPalette dp = DPaletteHelper::instance()->palette(resetBtn);
+        dp.setColor(DPalette::Light, Qt::white);
+        dp.setColor(DPalette::Dark, Qt::white);
+        dp.setColor(QPalette::ButtonText, Qt::black);
+        dp.setColor(QPalette::HighlightedText, Qt::black);
+        dp.setColor(DPalette::TextTitle, Qt::black);
+        dp.setColor(DPalette::TextLively, Qt::black);
+        dp.setColor(DPalette::TextTips, Qt::black);
+        DPaletteHelper::instance()->setPalette(resetBtn, dp);
+    }
+    QMenu *menu = new QMenu(resetBtn);
+    connect(menu, &QMenu::aboutToShow, menu, [menu]() {
+        DPlatformWindowHandle handle(menu);
+        handle.setWindowRadius(8);
+    });
+    if (methods & ResetPasswordHelper::VerificationCodeReset) {
+        QAction *act = menu->addAction(tr("Verification Code"));
+        act->setProperty("method", ResetPasswordHelper::VerificationCodeReset);
+    }
+    if (methods & ResetPasswordHelper::OfflineKeyReset) {
+        QAction *act = menu->addAction(tr("Offline Key"));
+        act->setProperty("method", ResetPasswordHelper::OfflineKeyReset);
+    }
+    if (methods & ResetPasswordHelper::SecurityQuestionReset) {
+        const QString secConfig = m_resetPasswordHelper->securityQuestionsConfig();
+        if (secConfig == "Hidden") {
+            // Hidden：完全隐藏入口
+        } else {
+            QAction *act = menu->addAction(tr("Security Questions"));
+            act->setProperty("method", ResetPasswordHelper::SecurityQuestionReset);
+            if (secConfig == "Disabled")
+                act->setEnabled(false);  // Disabled：灰色不可点击
+        }
+    }
+    resetBtn->setMenu(menu);
+    m_resetPasswordPushButton = resetBtn;
+    connect(menu, &QMenu::triggered, this, [this](QAction *action) {
+        int method = action->property("method").toInt();
+        m_resetPasswordHelper->triggerResetPasswordByMethod(method);
+        if (method != ResetPasswordHelper::SecurityQuestionReset) {
+            m_resetDialogShow = true;
+            emit m_resetPasswordFloatingMessage->closeButtonClicked();
+        }
+    });
+    m_resetPasswordFloatingMessage->setWidget(resetBtn);
+    m_resetPasswordFloatingMessage->setMessage(tr("Forgot password?"));
+    connect(m_resetPasswordFloatingMessage.data(), &DFloatingMessage::closeButtonClicked,
+            this, &AuthModule::onResetPasswordMessageCloseButtonClicked);
+    DMessageManager::instance()->sendMessage(centerFrame, m_resetPasswordFloatingMessage.data());
+}
+
+void AuthModule::closeResetPasswordMessage()
+{
+    if (m_resetPasswordFloatingMessage) {
+        m_resetPasswordPushButton.clear();
+        m_resetPasswordFloatingMessage->close();
+        m_resetPasswordFloatingMessage->deleteLater();
+        m_resetPasswordFloatingMessage.clear();
+    }
+}
+
+void AuthModule::updateResetPasswordUI()
+{
+    // 前置检查：域管账户或不满足显示条件直接跳过（不触发 DBus 调用）
+    if (m_currentUid > 9999 || !m_resetPasswordHelper->isShowResetPasswordMessage()) {
+        closeResetPasswordMessage();
+        return;
+    }
+
+    // 缓存未就绪时等待异步预取完成，不阻塞 UI
+    // 预取完成后通过 availableMethodsChanged 信号驱动 UI 更新
+    if (!m_resetPasswordHelper->isMethodsCached()) {
+        closeResetPasswordMessage();
+        m_resetPasswordHelper->requestRefresh();
+        return;
+    }
+
+    if (m_resetPasswordMessageVisible) {
+        showResetPasswordMessage();
+    } else {
+        closeResetPasswordMessage();
+    }
+}
+
+void AuthModule::clearResetPasswordCache()
+{
+    if (m_resetPasswordHelper) {
+        m_resetPasswordHelper->clearCache();
+    }
+}
+
+void AuthModule::requestRefreshResetPasswordCache()
+{
+    if (m_resetPasswordHelper) {
+        m_resetPasswordHelper->requestRefresh();
+    }
+}
+
+void AuthModule::setCurrentUid(uid_t uid)
+{
+    m_currentUid = uid;
+    if (m_resetPasswordHelper) {
+        m_resetPasswordHelper->setCurrentUid(uid);
+    }
+}
+
+void AuthModule::setResetPasswordMessageVisible(bool isVisible)
+{
+    if (m_resetPasswordMessageVisible == isVisible)
+        return;
+
+    // 如果设置为显示重置按钮，失败次数>=3次就显示重置密码
+    if (isVisible && m_limitsInfo && m_limitsInfo->numFailures < 3)
+        return;
+
+    m_resetPasswordMessageVisible = isVisible;
+    emit resetPasswordMessageVisibleChanged(m_resetPasswordMessageVisible);
+}
+
+void AuthModule::onResetPasswordMessageCloseButtonClicked()
+{
+    m_resetPasswordMessageVisible = false;
+    emit resetPasswordMessageVisibleChanged(false);
+}
+
+QWidget *AuthModule::findResetPasswordCenterFrame()
+{
+    QWidget *parent = parentWidget();
+    if (!parent)
+        return nullptr;
+    return parent->parentWidget();
 }

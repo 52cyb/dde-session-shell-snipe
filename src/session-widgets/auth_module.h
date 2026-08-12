@@ -7,8 +7,12 @@
 
 #include "authcommon.h"
 #include "constants.h"
+#include "reset_password_helper.h"
 
 #include <DLabel>
+#include <DPushButton>
+#include <DIconButton>
+#include <DFloatingMessage>
 
 #include <QWidget>
 #include <QDebug>
@@ -78,11 +82,38 @@ public:
     inline bool isMFA() const { return m_authFactorType == DDESESSIONCC::MultiAuthFactor; }
     bool isLocked() const;
 
+    // 重置密码相关
+    void connectResetPasswordHelper(ResetPasswordHelper *helper);
+    void onResetPasswordHelperRequestSecurityQuestionReset();
+    void onResetPasswordHelperRequestDialogStateChanged(bool visible);
+    void onResetPasswordHelperAvailableMethodsChanged(int methods);
+    virtual void resetPasswordMessageVisibleChanged(bool visible) { Q_UNUSED(visible); }
+    virtual void resetPasswordCloseMessage();
+    virtual void resetPasswordShowMessage(int methods);
+
+    // 重置密码公共方法（派生类可继承使用）
+    virtual void showResetPasswordMessage();
+    virtual void closeResetPasswordMessage();
+    virtual void updateResetPasswordUI();
+    void clearResetPasswordCache();
+    void requestRefreshResetPasswordCache();
+    virtual void setCurrentUid(uid_t uid);
+    virtual void setResetPasswordMessageVisible(bool isVisible);
+
+    // 内部虚方法（子类可覆盖处理差异化行为）
+    virtual void onResetPasswordMessageCloseButtonClicked();
+
+    // 子类可覆盖的虚方法（由 showResetPasswordMessage 调用查找父窗口）
+    // 默认实现：向上查找两级父窗口，子类（如 AuthPassword/AuthSingle）可覆盖
+    virtual QWidget *findResetPasswordCenterFrame();
+
 signals:
     void activeAuth(const AuthCommon::AuthType);
     void authFinished(const AuthCommon::AuthState);
     void requestAuthenticate();
     void unlockTimeChanged();
+    void requestSecurityQuestionReset();
+    void requestResetPasswordDialogStateChanged(bool visible);
 
 protected:
     void initConnections();
@@ -104,6 +135,15 @@ protected:
     bool m_isAuthing;         // 是否正在验证
     AuthFactorType m_authFactorType;    // 验证因子类型
     bool m_showAuthState;     // 是否显示验证状态控件
+    bool m_resetPasswordMessageVisible = false;
+
+    // 重置密码浮窗相关
+    QPointer<DFloatingMessage> m_resetPasswordFloatingMessage;
+    QPointer<DPushButton> m_resetPasswordPushButton;
+    DIconButton *m_iconButton = nullptr;
+    ResetPasswordHelper *m_resetPasswordHelper = nullptr;
+    uid_t m_currentUid = 0;
+    bool m_resetDialogShow = false;
 };
 
 #endif // AUTHMODULE_H
