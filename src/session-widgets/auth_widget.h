@@ -131,6 +131,10 @@ public:
     virtual void setAuthState(const AuthCommon::AuthType type, const AuthCommon::AuthState state, const QString &message);
     virtual int getTopSpacing() const;
     virtual QWidget* getAuthWidget();
+    // 清除重置密码缓存的 DBus 数据（解锁成功时调用，下次锁屏自动重新缓存）
+    virtual void clearResetPasswordCache();
+    // 请求刷新重置密码缓存（锁屏显示时调用，确保使用最新数据）
+    virtual void requestRefreshResetPasswordCache();
 
     void setAccountErrorMsg(const QString &message);
     void syncPasswordResetPasswordVisibleChanged(const QVariant &value);
@@ -148,6 +152,8 @@ Q_SIGNALS:
     void authFinished();
     void updateParentLayout();
     void noPasswordLoginChanged(const QString &account, bool noPassword);
+    void requestSecurityQuestionReset();
+    void requestResetPasswordDialogStateChanged(bool visible);
 
 protected:
     void showEvent(QShowEvent *event) override;

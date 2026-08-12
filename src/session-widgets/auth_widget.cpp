@@ -516,7 +516,7 @@ void AuthWidget::syncPasswordResetPasswordVisibleChanged(const QVariant &value)
  */
 void AuthWidget::syncResetPasswordUI()
 {
-    if (m_singleAuth) {
+    if (m_singleAuth && m_singleAuth->isVisible()) {
         m_singleAuth->updateResetPasswordUI();
     }
     if (m_passwordAuth && m_passwordAuth->isVisible()) {
@@ -536,6 +536,9 @@ void AuthWidget::syncUKey(const QVariant &value)
 
 void AuthWidget::showEvent(QShowEvent *event)
 {
+    // 锁屏显示时请求刷新重置密码缓存，确保使用最新数据
+    requestRefreshResetPasswordCache();
+
     activateWindow();
 
     if (focusProxy()) {
@@ -556,6 +559,26 @@ int AuthWidget::getTopSpacing() const
 QWidget *AuthWidget::getAuthWidget()
 {
     return this;
+}
+
+void AuthWidget::clearResetPasswordCache()
+{
+    if (m_singleAuth) {
+        m_singleAuth->clearResetPasswordCache();
+    }
+    if (m_passwordAuth) {
+        m_passwordAuth->clearResetPasswordCache();
+    }
+}
+
+void AuthWidget::requestRefreshResetPasswordCache()
+{
+    if (m_singleAuth) {
+        m_singleAuth->requestRefreshResetPasswordCache();
+    }
+    if (m_passwordAuth) {
+        m_passwordAuth->requestRefreshResetPasswordCache();
+    }
 }
 
 int AuthWidget::calcCurrentHeight(const int height) const
