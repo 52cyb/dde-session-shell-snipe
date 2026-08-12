@@ -342,15 +342,17 @@ void FullScreenBackground::enterEvent(QEnterEvent *event)
 void FullScreenBackground::enterEvent(QEvent *event)
 #endif
 {
+    auto lockContent = qobject_cast<LockContent *>(currentContent.data());
+    const bool hasResetPasswordDialog = lockContent && lockContent->hasResetPasswordDialog();
     qCInfo(DDE_SS) << "Enter event, enable enter event:" << m_enableEnterEvent << ", visible:" << m_model->visible();
-    if (m_enableEnterEvent && m_model->visible()) {
+    if (!hasResetPasswordDialog && m_enableEnterEvent && m_model->visible()) {
         updateCurrentFrame(this);
         // 多屏情况下，此Frame晚于其它Frame显示出来时，可能处于未激活状态（特别是在wayland环境下比较明显）
         activateWindow();
     }
 
     // 锁屏截图之后 active window 不是锁屏了，此时发现不是 active window 主动尝试激活
-    if (!isActiveWindow() && contentVisible())
+    if (!hasResetPasswordDialog && !isActiveWindow() && contentVisible())
         tryActiveWindow();
 
     return QWidget::enterEvent(event);
@@ -419,10 +421,12 @@ void FullScreenBackground::showEvent(QShowEvent *event)
     if (m_model->isUseWayland()) {
         Q_EMIT requestDisableGlobalShortcutsForWayland(true);
     }
+    auto lockContent = qobject_cast<LockContent *>(currentContent.data());
+    const bool hasResetPasswordDialog = lockContent && lockContent->hasResetPasswordDialog();
     // fix bug 155019 此处是针对wayland下屏保退出，因qt没有发送enterEvent事件，进而导致密码框没有显示的规避方案
     // x下面先激活其它窗口右键菜单，锁屏后，再激活dock右键菜单自动锁屏后，同样存在没有发送enterEvent事件的问题
     // 如果鼠标的位置在当前屏幕内且锁屏状态为显示，将密码框显示出来
-    if (m_model->visible() && geometry().contains(QCursor::pos())) {
+    if (!hasResetPasswordDialog && m_model->visible() && geometry().contains(QCursor::pos())) {
         currentContent->show();
         // 多屏情况下，此Frame晚于其它Frame显示出来时，可能处于未激活状态（特别是在wayland环境下比较明显）
         activateWindow();
@@ -438,7 +442,9 @@ void FullScreenBackground::showEvent(QShowEvent *event)
 #endif
 
     // 显示的时候需要置顶，截图在上方的话无法显示锁屏 见Bug-140545
-    raise();
+    if (!hasResetPasswordDialog) {
+        raise();
+    }
 
     m_blackWidget->setBlackMode(m_model->isBlackMode());
 
@@ -532,6 +538,10 @@ bool FullScreenBackground::event(QEvent *e)
 {
 #ifndef QT_DEBUG
     if (e->type() == QEvent::WindowDeactivate) {
+        auto lockContent = qobject_cast<LockContent *>(currentContent.data());
+        if (lockContent && lockContent->hasResetPasswordDialog()) {
+            return QWidget::event(e);
+        }
         if (contentVisible()) {
             tryActiveWindow();
         }
