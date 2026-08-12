@@ -10,6 +10,7 @@
 #include "sessionbasewindow.h"
 #include "centertopwidget.h"
 #include "popupwindow.h"
+#include "security_question_manager.h"
 
 #include <QWidget>
 #include <QLocalServer>
@@ -46,6 +47,7 @@ public:
     void updateDesktopBackgroundPath(const QString &path);
     void hideEvent(QHideEvent *event) override;
     static void OnDConfigPropertyChanged(const QString &key, const QVariant &value, QObject *objPtr);
+    bool hasResetPasswordDialog() const { return m_hasResetPasswordDialog || (m_securityQuestionManager && m_securityQuestionManager->hasResetPasswordDialog()); }
 
 signals:
     void requestBackground(const QString &path);
@@ -62,6 +64,7 @@ signals:
     void parentChanged();
     void noPasswordLoginChanged(const QString &account, bool noPassword);
     void requestLockStateChange(const bool locked);
+    void requestResetPasswordDialogStateChanged(bool visible);
 
 public slots:
     void pushPasswordFrame();
@@ -74,6 +77,8 @@ public slots:
     void showUserList();
     void showLockScreen();
     void showShutdown();
+    void onRequestSecurityQuestionReset();
+    void onResetPasswordDialogStateChanged(bool visible);
 
 protected:
     void mouseReleaseEvent(QMouseEvent *event) Q_DECL_OVERRIDE;
@@ -134,6 +139,7 @@ protected:
     bool m_MPRISEnable = false;
     bool m_showMediaWidget = false;
     bool m_hasResetPasswordDialog = false;
+    SecurityQuestionManager *m_securityQuestionManager = nullptr;
 };
 
 #endif // LOCKCONTENT_H

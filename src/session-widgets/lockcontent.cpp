@@ -25,6 +25,8 @@
 
 #include <QLocalSocket>
 #include <QMouseEvent>
+#include <QDBusInterface>
+#include <QDBusReply>
 
 #include "dbusconstant.h"
 
@@ -39,7 +41,7 @@ LockContent::LockContent(QWidget *parent)
     , m_currentModeStatus(SessionBaseModel::ModeStatus::NoStatus)
     , m_showMediaWidget(DConfigHelper::instance()->getConfig(SHOW_MEDIA_WIDGET, false).toBool())
 {
-
+    qDBusRegisterMetaType<QMap<int, QString>>();
 }
 
 LockContent *LockContent::instance()
@@ -60,6 +62,11 @@ void LockContent::init(SessionBaseModel *model)
     }
     m_initialized = true;
     m_model = model;
+    m_securityQuestionManager = new SecurityQuestionManager(m_model, this);
+    connect(m_securityQuestionManager, &SecurityQuestionManager::resetPasswordDialogStateChanged,
+            this, &LockContent::onResetPasswordDialogStateChanged);
+    connect(m_securityQuestionManager, &SecurityQuestionManager::requestTryGrabKeyboard,
+            this, &LockContent::tryGrabKeyboard);
     // 异步获取CPU硬件信息，判断是否为PANGU CPU
     // FIXME: CPU硬件信息可能会改且其它的机型也可能会有PANGU CPU，这里的判断不准确
     if (m_model->appType() == AuthCommon::Lock) {
@@ -188,8 +195,14 @@ void LockContent::initConnections()
     connect(m_model, &SessionBaseModel::userListChanged, this, &LockContent::onUserListChanged);
     connect(m_model, &SessionBaseModel::userListLoginedChanged, this, &LockContent::onUserListChanged);
     connect(m_model, &SessionBaseModel::authFinished, this, [this](bool successful) {
-        if (successful)
+        if (successful) {
+            m_securityQuestionManager->cleanup();
+            // 解锁成功时清除缓存，下次锁屏自动重新查询 DBus 获取最新配置
+            if (m_authWidget) {
+                m_authWidget->clearResetPasswordCache();
+            }
             setVisible(false);
+        }
         restoreMode();
     });
     connect(m_model, &SessionBaseModel::MFAFlagChanged, this, [this](const bool isMFA) {
@@ -252,6 +265,8 @@ void LockContent::initMFAWidget()
             pushPasswordFrame();
         }
     });
+    connect(m_mfaWidget, &AuthWidget::requestSecurityQuestionReset, this, &LockContent::onRequestSecurityQuestionReset);
+    connect(m_mfaWidget, &AuthWidget::requestResetPasswordDialogStateChanged, this, &LockContent::onResetPasswordDialogStateChanged);
 }
 
 /**
@@ -285,6 +300,8 @@ void LockContent::initSFAWidget()
         m_centerVLayout->invalidate();
     });
     connect(m_sfaWidget, &AuthWidget::noPasswordLoginChanged, this, &LockContent::noPasswordLoginChanged);
+    connect(m_sfaWidget, &AuthWidget::requestSecurityQuestionReset, this, &LockContent::onRequestSecurityQuestionReset);
+    connect(m_sfaWidget, &AuthWidget::requestResetPasswordDialogStateChanged, this, &LockContent::onResetPasswordDialogStateChanged);
 }
 
 // init full managed plugin widget
@@ -498,6 +515,7 @@ void LockContent::onDisConnect()
         m_authWidget->syncPasswordResetPasswordVisibleChanged(QVariant::fromValue(true));
         m_authWidget->syncResetPasswordUI();
     }
+    onResetPasswordDialogStateChanged(false);
     // 这种情况下不必强制要求可以抓取到键盘，因为可能是网络弹窗抓取了键盘
     tryGrabKeyboard(false);
     enableSystemShortcut(QStringList() << "screenshot"
@@ -507,6 +525,28 @@ void LockContent::onDisConnect()
                                        << "screenshot-scroll"
                                        << "deepin-screen-recorder",
                          true, false);
+}
+
+void LockContent::onResetPasswordDialogStateChanged(bool visible)
+{
+    m_hasResetPasswordDialog = visible;
+
+    if (visible) {
+        Q_EMIT m_model->hidePluginMenu();
+        if (window()->windowHandle() && window()->windowHandle()->setKeyboardGrabEnabled(false)) {
+            qCDebug(DDE_SHELL) << "Release keyboard grab for reset password dialog";
+        }
+    } else {
+        // 安全对话框关闭后，重新抓取键盘以便锁屏继续接收输入
+        if (window()->windowHandle() && !window()->windowHandle()->setKeyboardGrabEnabled(true)) {
+            tryGrabKeyboard(false);
+        }
+    }
+}
+
+void LockContent::onRequestSecurityQuestionReset()
+{
+    m_securityQuestionManager->handleRequestReset(m_model->currentUser()->uid());
 }
 
 void LockContent::onStatusChanged(SessionBaseModel::ModeStatus status)
@@ -594,6 +634,7 @@ void LockContent::showEvent(QShowEvent *event)
 
 void LockContent::hideEvent(QHideEvent *event)
 {
+    m_securityQuestionManager->cleanup();
     m_shutdownFrame->recoveryLayout();
     QFrame::hideEvent(event);
 }
