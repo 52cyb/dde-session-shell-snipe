@@ -92,6 +92,29 @@
     </message>
 </context>
 <context>
+    <name>AuthModule</name>
+    <message>
+        <source>Reset Password</source>
+        <translation type="unfinished">Reset Password</translation>
+    </message>
+    <message>
+        <source>Verification Code</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Offline Key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Security Questions</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Forgot password?</source>
+        <translation type="unfinished">Forgot password?</translation>
+    </message>
+</context>
+<context>
     <name>AuthPasskey</name>
     <message>
         <source>Please plug in the security key</source>
@@ -146,14 +169,6 @@
             <numerusform>Please try again %n minutes later</numerusform>
         </translation>
     </message>
-    <message>
-        <source>Reset Password</source>
-        <translation>Reset Password</translation>
-    </message>
-    <message>
-        <source>Forgot password?</source>
-        <translation>Forgot password?</translation>
-    </message>
 </context>
 <context>
     <name>AuthSingle</name>
@@ -167,14 +182,6 @@
             <numerusform>Please try again %n minutes later</numerusform>
             <numerusform>Please try again %n minutes later</numerusform>
         </translation>
-    </message>
-    <message>
-        <source>Reset Password</source>
-        <translation>Reset Password</translation>
-    </message>
-    <message>
-        <source>Forgot password?</source>
-        <translation>Forgot password?</translation>
     </message>
 </context>
 <context>
@@ -281,13 +288,6 @@
     </message>
 </context>
 <context>
-    <name>LighterGreeter</name>
-    <message>
-        <source>Standard Mode</source>
-        <translation type="unfinished"></translation>
-    </message>
-</context>
-<context>
     <name>LockContent</name>
     <message>
         <source>Lock Screen</source>
@@ -322,6 +322,25 @@
     <message>
         <source>The above users are still logged in and data will be lost due to reboot, are you sure you want to reboot?</source>
         <translation>The above users are still logged in and data will be lost due to reboot, are you sure you want to reboot?</translation>
+    </message>
+</context>
+<context>
+    <name>ResetPasswordHelper</name>
+    <message>
+        <source>Reset by Verification Code</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Reset by Security Questions</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Reset by Offline Key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Reset Password</source>
+        <translation type="unfinished">Reset Password</translation>
     </message>
 </context>
 <context>
@@ -379,25 +398,6 @@
     <message>
         <source>Start system monitor</source>
         <translation>Start system monitor</translation>
-    </message>
-</context>
-<context>
-    <name>UdcpMFALoginWidget</name>
-    <message>
-        <source>发送验证码</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>请输入手机号</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>请输入验证码</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>获取验证码</source>
-        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -509,14 +509,40 @@
         <translation type="unfinished"></translation>
     </message>
 </context>
-<context>
+    <context>
+    <name>LighterGreeter</name>
+    <message>
+        <source>Standard Mode</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+    <context>
+    <name>UdcpMFALoginWidget</name>
+    <message>
+        <source>发送验证码</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>请输入手机号</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>请输入验证码</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>获取验证码</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+    <context>
     <name>dss::module::AssistLoginWidget</name>
     <message>
         <source>Automatic login</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
-<context>
+    <context>
     <name>dss::module::NetworkModule</name>
     <message>
         <source>Turn on</source>
