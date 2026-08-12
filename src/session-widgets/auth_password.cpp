@@ -47,12 +47,7 @@ AuthPassword::AuthPassword(QWidget *parent)
     , m_passwordShowBtn(new DIconButton(this))
     , m_passwordHintBtn(new DIconButton(this))
     , m_passwordTipsWidget(new PasswordErrorTipsWidget(this))
-    , m_resetPasswordMessageVisible(false)
-    , m_resetPasswordFloatingMessage(nullptr)
-    , m_bindCheckTimer(nullptr)
     , m_passwordHintWidget(nullptr)
-    , m_iconButton(nullptr)
-    , m_resetDialogShow(false)
     , m_isPasswdAuthWidgetReplaced(false)
     , m_assistLoginWidget(nullptr)
     , m_authenticationDconfig(DConfig::create("org.deepin.dde.authentication", "org.deepin.dde.authentication.errorecho", QString(), this))
@@ -67,6 +62,9 @@ AuthPassword::AuthPassword(QWidget *parent)
     initUI();
     initConnections();
 
+    m_resetPasswordHelper = new ResetPasswordHelper(this);
+    connectResetPasswordHelper(m_resetPasswordHelper);
+
     m_lineEdit->installEventFilter(this);
     m_lineEdit->setCopyEnabled(false);
     m_lineEdit->setCutEnabled(false);
@@ -77,9 +75,6 @@ AuthPassword::~AuthPassword()
 {
     // QWidget析构时会clearFocus, focusChanged会被触发，且槽函数操作了成员变量会导致崩溃，在这里提前断开连接
     m_lineEdit->disconnect(this);
-    if (m_resetPasswordMessageVisible) {
-        closeResetPasswordMessage();
-    }
 }
 
 /**
@@ -335,6 +330,8 @@ void AuthPassword::reset()
         m_passwordTipsWidget->adjustSize();
         emit passwordErrorTipsClearChanged(true);
     }
+
+    closeResetPasswordMessage();
 }
 
 /**
@@ -511,7 +508,7 @@ void AuthPassword::setLimitsInfo(const LimitsInfo &info)
             setAuthState(AS_Locked, "Locked");
         }
 
-        if (this->isVisible() && isShowResetPasswordMessage()) {
+        if (this->isVisible() && m_resetPasswordHelper->isShowResetPasswordMessage()) {
             qCDebug(DDE_SHELL) << "Begin reset passoword";
             setResetPasswordMessageVisible(true);
             updateResetPasswordUI();
@@ -570,7 +567,9 @@ void AuthPassword::setPasswordHint(const QString &hint)
 
 void AuthPassword::setCurrentUid(uid_t uid)
 {
-    m_currentUid = uid;
+    if (m_currentUid != uid) {
+        AuthModule::setCurrentUid(uid);
+    }
 }
 
 /**
@@ -692,180 +691,13 @@ void AuthPassword::setResetPasswordMessageVisible(const bool isVisible, bool fro
     emit resetPasswordMessageVisibleChanged(m_resetPasswordMessageVisible);
 }
 
-/**
- * @brief 显示重置密码消息框
- */
-void AuthPassword::showResetPasswordMessage()
+void AuthPassword::onResetPasswordMessageCloseButtonClicked()
 {
-    if (m_resetPasswordFloatingMessage) {
-        m_resetPasswordFloatingMessage->show();
-        return;
-    }
-
-    QWidget *userLoginWidget = parentWidget();
-    if (!userLoginWidget) {
-        return;
-    }
-
-    QWidget *centerFrame = userLoginWidget->parentWidget();
-    if (!centerFrame) {
-        return;
-    }
-
-    QPalette pa;
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    pa.setColor(QPalette::Window, QColor(247, 247, 247, 51));
-#else
-    pa.setColor(QPalette::Background, QColor(247, 247, 247, 51));
-#endif
-    pa.setColor(QPalette::Highlight, Qt::white);
-    pa.setColor(QPalette::HighlightedText, Qt::black);
-    m_resetPasswordFloatingMessage = new DFloatingMessage(DFloatingMessage::MessageType::ResidentType);
-    m_resetPasswordFloatingMessage->setPalette(pa);
-    // DFloatingMessage 中未放开seticonsize接口，无法设置图标大小，使用缩放函数会造成图标锯齿
-    // 只能使用findChildren找到对应的图标控件来设置图标大小进行规避
-    // DFloatingMessage中有两个按钮一个是DIconButton,另一个是继承于DIconButton的DDialogCloseButton，需要区分
-    QList<DIconButton *> btnList = m_resetPasswordFloatingMessage->findChildren<DIconButton *>();
-    foreach (const auto iconButton, btnList) {
-        DDialogCloseButton *closeButton = qobject_cast<DDialogCloseButton *>(iconButton);
-        if (closeButton) {
-            continue;
-        }
-        iconButton->installEventFilter(this);
-        m_iconButton = iconButton;
-    }
-    m_resetPasswordFloatingMessage->setIcon(QIcon("://misc/images/dss_warning.svg"));
-    DSuggestButton *suggestButton = new DSuggestButton(tr("Reset Password"));
-    suggestButton->setAutoDefault(true);
-    m_resetPasswordFloatingMessage->setWidget(suggestButton);
-    m_resetPasswordFloatingMessage->setMessage(tr("Forgot password?"));
-    connect(suggestButton, &QPushButton::clicked, this, [this] {
-#ifndef ENABLE_DSS_SNIPE
-    com::deepin::daemon::accounts::User
-#else
-    org::deepin::dde::accounts1::User
-#endif
-        user(DSS_DBUS::accountsService, QString(DSS_DBUS::accountsUserPath).arg(m_currentUid), QDBusConnection::systemBus());
-        auto reply = user.SetPassword("");
-        m_resetDialogShow = true;
-        reply.waitForFinished();
-        if (reply.isError())
-            qCWarning(DDE_SHELL) << "Reset password message error: " << reply.error().message();
-
-        emit m_resetPasswordFloatingMessage->closeButtonClicked();
-    });
-    connect(m_resetPasswordFloatingMessage, &DFloatingMessage::closeButtonClicked, this, [this]() {
-        if (m_resetPasswordFloatingMessage) {
-            m_resetPasswordFloatingMessage->deleteLater();
-            m_resetPasswordFloatingMessage = nullptr;
-        }
-        m_resetPasswordMessageVisible = false;
-        emit resetPasswordMessageVisibleChanged(false);
-        // 重置密码后，输入框重新获取焦点
+    m_resetPasswordMessageVisible = false;
+    emit resetPasswordMessageVisibleChanged(false);
+    // 重置密码后，输入框重新获取焦点
+    if (m_lineEdit)
         m_lineEdit->setFocus();
-    });
-    DMessageManager::instance()->sendMessage(centerFrame, m_resetPasswordFloatingMessage);
-}
-
-/**
- * @brief 关闭重置密码消息框
- */
-void AuthPassword::closeResetPasswordMessage()
-{
-    if (m_resetPasswordFloatingMessage) {
-        m_resetPasswordFloatingMessage->close();
-        m_resetPasswordFloatingMessage->deleteLater();
-        m_resetPasswordFloatingMessage = nullptr;
-    }
-}
-
-/**
- * @brief 当前账户是否绑定unionid
- */
-bool AuthPassword::isUserAccountBinded()
-{
-    QDBusInterface syncHelperInter("com.deepin.sync.Helper",
-                                   "/com/deepin/sync/Helper",
-                                   "com.deepin.sync.Helper",
-                                   QDBusConnection::systemBus());
-    QDBusReply<QString> retUOSID = syncHelperInter.call("UOSID");
-    if (!syncHelperInter.isValid()) {
-        return false;
-    }
-    QString uosid;
-    if (retUOSID.isValid()) {
-        uosid = retUOSID.value();
-    } else {
-        qCWarning(DDE_SHELL) << "UOS ID is invalid, error: " << retUOSID.error().message();
-        return false;
-    }
-
-    QDBusInterface accountsInter(DSS_DBUS::accountsService,
-                                 QString(DSS_DBUS::accountsUserPath).arg(m_currentUid),
-                                 DSS_DBUS::accountsUserInterface,
-                                 QDBusConnection::systemBus());
-    QVariant retUUID = accountsInter.property("UUID");
-    if (!accountsInter.isValid()) {
-        return false;
-    }
-    QString uuid = retUUID.toString();
-
-    QDBusReply<QString> retLocalBindCheck = syncHelperInter.call("LocalBindCheck", uosid, uuid);
-    if (!syncHelperInter.isValid()) {
-        return false;
-    }
-    QString ubid;
-    if (retLocalBindCheck.isValid()) {
-        ubid = retLocalBindCheck.value();
-        if (m_bindCheckTimer) {
-            m_bindCheckTimer->stop();
-        }
-    } else {
-        qCWarning(DDE_SHELL) << "UOSID:" << uosid << "uuid:" << uuid;
-        qCWarning(DDE_SHELL) << "Local bind check is invalid, error: " << retLocalBindCheck.error().message();
-        if (retLocalBindCheck.error().message().contains("network error")) {
-            if (m_bindCheckTimer == nullptr) {
-                m_bindCheckTimer = new QTimer(this);
-                connect(m_bindCheckTimer, &QTimer::timeout, this, [this] {
-                    qCWarning(DDE_SHELL) << "BindCheck retry!";
-                    if (isUserAccountBinded()) {
-                        setResetPasswordMessageVisible(true);
-                        updateResetPasswordUI();
-                    }
-                });
-            }
-            if (!m_bindCheckTimer->isActive()) {
-                m_bindCheckTimer->start(1000);
-            }
-        }
-        return false;
-    }
-
-    return !ubid.isEmpty();
-}
-
-/**
- * @brief 更新重置密码UI相关状态
- */
-void AuthPassword::updateResetPasswordUI()
-{
-    // >=10000 域管账户, 该功能屏蔽域管账户
-    if (m_currentUid > 9999) {
-        return;
-    }
-
-#ifndef ENABLE_DSS_SNIPE
-    if (m_resetPasswordMessageVisible) {
-        showResetPasswordMessage();
-    } else {
-        closeResetPasswordMessage();
-    }
-#endif
-}
-
-bool AuthPassword::isShowResetPasswordMessage()
-{
-    return QFile::exists(DEEPIN_DEEPINID_DAEMON_PATH) && QFile::exists(ResetPassword_Exe_Path) && m_currentUid <= 9999 && !IsCommunitySystem;
 }
 
 bool AuthPassword::eventFilter(QObject *watched, QEvent *event)
@@ -909,6 +741,9 @@ void AuthPassword::hideEvent(QHideEvent *event)
 
 void AuthPassword::showEvent(QShowEvent *event)
 {
+    // 锁屏显示时请求刷新缓存，确保使用最新数据
+    m_resetPasswordHelper->requestRefresh();
+
     m_passwordHintBtn->setVisible(m_limitsInfo->numFailures > 0 && !m_passwordHint.isEmpty());
     updatePasswordTextMargins();
     if (m_limitsInfo->numFailures >= 3) {
@@ -916,7 +751,7 @@ void AuthPassword::showEvent(QShowEvent *event)
             setAuthState(AS_Locked, "Locked");
         }
 
-        if (isShowResetPasswordMessage()) {
+        if (m_resetPasswordHelper->isShowResetPasswordMessage()) {
             qCDebug(DDE_SHELL) << "Begin reset passoword";
             setResetPasswordMessageVisible(true);
             updateResetPasswordUI();

@@ -17,6 +17,8 @@
 #include <DMessageManager>
 #include <DAlertControl>
 
+#include <QPointer>
+
 #define Password_Auth QStringLiteral(":/misc/images/auth/password.svg")
 
 class DLineEditEx;
@@ -43,8 +45,6 @@ public:
     void setLineEditInfo(const QString &text, const TextType type);
     void setPasswordHint(const QString &hint);
     void setCurrentUid(uid_t uid);
-    void showResetPasswordMessage();
-    void closeResetPasswordMessage();
     void setAuthStatueVisible(bool visible);
 
     bool isShowResetPasswordMessage();
@@ -85,7 +85,6 @@ signals:
 
 public slots:
     void setResetPasswordMessageVisible(const bool isVisible, bool fromResetDialog = false);
-    void updateResetPasswordUI();
     void onReadyToAuthChanged(bool ready);
 
 protected:
@@ -101,12 +100,12 @@ private:
     void updateUnlockPrompt() override;
     void showPasswordHint();
     void setPasswordHintBtnVisible(const bool isVisible);
-    bool isUserAccountBinded();
     void showAlertMessage(const QString &text);
     void hidePasswordHintWidget();
     void updatePasswordTextMargins();
     QString getCurrentKBLayout() const;
     void setKBLayout(const QString &layout);
+    void onResetPasswordMessageCloseButtonClicked() override;
 
 private:
     bool m_passwordLineEditEnabled;
@@ -116,13 +115,7 @@ private:
     DIconButton *m_passwordHintBtn; // 密码提示按钮
     PasswordErrorTipsWidget* m_passwordTipsWidget;  // 认证错误提示窗口
     QString m_passwordHint;         // 密码提示
-    bool m_resetPasswordMessageVisible;
-    DFloatingMessage *m_resetPasswordFloatingMessage;
-    uid_t m_currentUid; // 当前用户uid
-    QTimer *m_bindCheckTimer;
     DAlertControl *m_passwordHintWidget;
-    DIconButton *m_iconButton;
-    bool m_resetDialogShow;
 
     bool m_isPasswdAuthWidgetReplaced;
     AssistLoginWidget *m_assistLoginWidget;
