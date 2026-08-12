@@ -393,6 +393,13 @@ void SFAWidget::initSingleAuth()
     connect(KeyboardMonitor::instance(), &KeyboardMonitor::capsLockStatusChanged, m_singleAuth, &AuthSingle::setCapsLockVisible);
     connect(m_lockButton, &QPushButton::clicked, m_singleAuth, &AuthSingle::requestAuthenticate);
 
+    connect(m_singleAuth, &AuthSingle::requestSecurityQuestionReset, this, [this] {
+        Q_EMIT requestSecurityQuestionReset();
+    });
+    connect(m_singleAuth, &AuthSingle::requestResetPasswordDialogStateChanged, this, [this](bool visible) {
+        Q_EMIT requestResetPasswordDialogStateChanged(visible);
+    });
+
     connect(m_singleAuth, &AuthSingle::lineEditTextChanged, this, [this](const QString &value) {
         m_lockButton->setEnabled(!value.isEmpty());
     });
@@ -454,6 +461,12 @@ void SFAWidget::initPasswdAuth()
     connect(m_passwordAuth, &AuthPassword::activeAuth, this, &SFAWidget::onActiveAuth);
     connect(m_passwordAuth, &AuthPassword::authFinished, this, [this] (const AuthState authState) {
         checkAuthResult(AT_Password, authState);
+    });
+    connect(m_passwordAuth, &AuthPassword::requestSecurityQuestionReset, this, [this] {
+        Q_EMIT requestSecurityQuestionReset();
+    });
+    connect(m_passwordAuth, &AuthPassword::requestResetPasswordDialogStateChanged, this, [this](bool visible) {
+        Q_EMIT requestResetPasswordDialogStateChanged(visible);
     });
     connect(m_passwordAuth, &AuthPassword::requestPluginAuthToken, this, [this](const QString & account, const QString & token) {
         m_passwordAuth->setAuthStateStyle(LOGIN_SPINNER);

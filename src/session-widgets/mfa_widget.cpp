@@ -258,6 +258,12 @@ void MFAWidget::initPasswdAuth()
     connect(m_passwordAuth, &AuthPassword::activeAuth, this, [this] {
         emit requestStartAuthentication(m_model->currentUser()->name(), AT_Password);
     });
+    connect(m_passwordAuth, &AuthPassword::requestSecurityQuestionReset, this, [this] {
+        Q_EMIT requestSecurityQuestionReset();
+    });
+    connect(m_passwordAuth, &AuthPassword::requestResetPasswordDialogStateChanged, this, [this](bool visible) {
+        Q_EMIT requestResetPasswordDialogStateChanged(visible);
+    });
     connect(m_passwordAuth, &AuthPassword::requestAuthenticate, this, [this] {
         const QString &text = m_passwordAuth->lineEditText();
         if (text.isEmpty()) {
