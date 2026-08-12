@@ -214,6 +214,11 @@ void SessionBaseModel::setAllowShowUserSwitchButton(bool allowShowUserSwitchButt
     emit allowShowUserSwitchButtonChanged(allowShowUserSwitchButton);
 }
 
+void SessionBaseModel::setPasswordResetByRequest(bool reset)
+{
+    m_passwordResetByRequest = reset;
+}
+
 void SessionBaseModel::setAlwaysShowUserSwitchButton(bool alwaysShowUserSwitchButton)
 {
     m_alwaysShowUserSwitchButton = alwaysShowUserSwitchButton;

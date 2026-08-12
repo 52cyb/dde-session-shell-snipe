@@ -143,6 +143,9 @@ public:
     inline bool alwaysShowUserSwitchButton() const { return m_alwaysShowUserSwitchButton; }
     void setAlwaysShowUserSwitchButton(bool alwaysShowUserSwitchButton);
 
+    inline bool passwordResetByRequest() const { return m_passwordResetByRequest; }
+    void setPasswordResetByRequest(bool reset);
+
     inline bool isServerModel() const { return m_isServerModel; }
     void setIsServerModel(bool server_model);
 
@@ -292,6 +295,7 @@ private:
     bool m_canSleep;
     bool m_allowShowUserSwitchButton;
     bool m_alwaysShowUserSwitchButton;
+    bool m_passwordResetByRequest = false;
     bool m_abortConfirm;
     bool m_isBlackMode;
     bool m_isHibernateMode;
