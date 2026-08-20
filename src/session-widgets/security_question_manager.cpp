@@ -14,9 +14,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPointer>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
-#include <QThread>
 #include <QTimer>
 
 #include "dbusconstant.h"
@@ -180,20 +180,23 @@ void SecurityQuestionManager::startImeAsync()
 
     auto *busProcess = new QProcess(this);
     busProcess->setProcessChannelMode(QProcess::MergedChannels);
+    m_securityQuestionBusProcess = busProcess;
 
-    connect(busProcess, &QProcess::started, this, [this]() {
+    connect(busProcess, &QProcess::started, this, [this, busProcess]() {
+        if (m_securityQuestionBusProcess != busProcess) return;
         if (m_imeStage < 1) m_imeStage = 1;
     });
     connect(busProcess, &QProcess::readyReadStandardOutput, this, [this, busProcess]() {
+        if (m_securityQuestionBusProcess != busProcess) return;
         if (m_imeStage > 1) return;
         const QString address = QString::fromLocal8Bit(busProcess->readAllStandardOutput().split('\n').first()).trimmed();
         if (address.isEmpty()) return;
         m_imeStage = 2;
         m_securityQuestionBusAddress = address;
-        m_securityQuestionBusProcess = busProcess;
         continueImeSetup();
     });
-    connect(busProcess, QOverload<QProcess::ProcessError>::of(&QProcess::errorOccurred), this, [this](QProcess::ProcessError) {
+    connect(busProcess, QOverload<QProcess::ProcessError>::of(&QProcess::errorOccurred), this, [this, busProcess](QProcess::ProcessError) {
+        if (m_securityQuestionBusProcess != busProcess) return;
         qCWarning(DDE_SHELL) << "Failed to start private session bus";
         stopSecurityQuestionIMEInfrastructure();
         m_imeStage = -1;
@@ -205,7 +208,15 @@ void SecurityQuestionManager::startImeAsync()
                       << QStringLiteral("--nofork")
                       << QStringLiteral("--print-address=1"));
 
-    QTimer::singleShot(3000, this, &SecurityQuestionManager::onImeTimeout);
+    // 超时保护：与 gerrit 保持一致，3000ms 内未完成 IME 搭建则判定超时。
+    // 注：fcitx-remote 就绪轮询上限仍为 5s，但受 3000ms 全局超时约束，
+    // 实际轮询窗口被截断，行为与 gerrit 一致。
+    const QPointer<QProcess> busGuard(busProcess);
+    QTimer::singleShot(3000, this, [this, busGuard] {
+        if (busGuard && m_securityQuestionBusProcess == busGuard) {
+            onImeTimeout();
+        }
+    });
 }
 
 void SecurityQuestionManager::continueImeSetup()
@@ -214,9 +225,15 @@ void SecurityQuestionManager::continueImeSetup()
         qCInfo(DDE_SHELL) << "Private session bus ready, address:" << m_securityQuestionBusAddress
                            << "original bus:" << QProcessEnvironment::systemEnvironment().value("DBUS_SESSION_BUS_ADDRESS");
 
-        const QString fcitxBin = QStandardPaths::findExecutable(QStringLiteral("fcitx"));
-        if (fcitxBin.isEmpty()) {
-            qCWarning(DDE_SHELL) << "fcitx not found, cannot start fallback IME";
+        m_fcitxExecutable = QStandardPaths::findExecutable(QStringLiteral("fcitx5"));
+        m_fcitxRemoteExecutable = QStandardPaths::findExecutable(QStringLiteral("fcitx5-remote"));
+        bool isFcitx5 = !m_fcitxExecutable.isEmpty() && !m_fcitxRemoteExecutable.isEmpty();
+        if (!isFcitx5) {
+            m_fcitxExecutable = QStandardPaths::findExecutable(QStringLiteral("fcitx"));
+            m_fcitxRemoteExecutable = QStandardPaths::findExecutable(QStringLiteral("fcitx-remote"));
+        }
+        if (m_fcitxExecutable.isEmpty() || m_fcitxRemoteExecutable.isEmpty()) {
+            qCWarning(DDE_SHELL) << "fcitx executable or remote command not found";
             stopSecurityQuestionIMEInfrastructure();
             m_imeStage = -1;
             resetDialogState();
@@ -228,8 +245,10 @@ void SecurityQuestionManager::continueImeSetup()
         fcitxEnv.insert(QStringLiteral("DBUS_SESSION_BUS_ADDRESS"), m_securityQuestionBusAddress);
         fcitxEnv.insert(QStringLiteral("DBUS_FATAL_WARNINGS"), QStringLiteral("0"));
         fcitxProcess->setProcessEnvironment(fcitxEnv);
+        m_securityQuestionFcitxProcess = fcitxProcess;
 
-        connect(fcitxProcess, &QProcess::started, this, [this]() {
+        connect(fcitxProcess, &QProcess::started, this, [this, fcitxProcess]() {
+            if (m_securityQuestionFcitxProcess != fcitxProcess) return;
             m_imeStage = 3;
             m_imePollCount = 0;
             if (!m_imePollTimer) {
@@ -239,17 +258,28 @@ void SecurityQuestionManager::continueImeSetup()
             }
             m_imePollTimer->start();
         });
-        connect(fcitxProcess, QOverload<QProcess::ProcessError>::of(&QProcess::errorOccurred), this, [this](QProcess::ProcessError) {
+        connect(fcitxProcess, QOverload<QProcess::ProcessError>::of(&QProcess::errorOccurred), this, [this, fcitxProcess](QProcess::ProcessError) {
+            if (m_securityQuestionFcitxProcess != fcitxProcess) return;
             qCWarning(DDE_SHELL) << "Failed to start fallback fcitx";
             stopSecurityQuestionIMEInfrastructure();
             m_imeStage = -1;
             resetDialogState();
         });
+        connect(fcitxProcess, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+                [this, fcitxProcess](int exitCode, QProcess::ExitStatus exitStatus) {
+            if (m_securityQuestionFcitxProcess != fcitxProcess) return;
+            if (m_imeStage >= 3 && m_flowInProgress) {
+                qCWarning(DDE_SHELL) << "Security question fcitx exited unexpectedly, exitCode:"
+                                     << exitCode << "exitStatus:" << exitStatus;
+            }
+        });
 
-        fcitxProcess->start(QStringLiteral("sh"), QStringList()
-            << QStringLiteral("-c")
-            << QStringLiteral("ulimit -c 0 && exec ") + fcitxBin + QStringLiteral(" -d"));
-        m_securityQuestionFcitxProcess = fcitxProcess;
+        // daemonize 参数差异：fcitx5 用 -D，fcitx4 用 -d
+        const QString daemonFlag = isFcitx5 ? QStringLiteral("-D") : QStringLiteral("-d");
+        fcitxProcess->start(QStringLiteral("sh"),
+                            QStringList() << QStringLiteral("-c")
+                            << QStringLiteral("ulimit -c 0 && exec ")
+                               + m_fcitxExecutable + QStringLiteral(" ") + daemonFlag);
         return;
     }
 
@@ -264,22 +294,28 @@ void SecurityQuestionManager::continueImeSetup()
 
         m_imePollCount++;
         if (m_fcitxRemoteCheck) {
-            m_fcitxRemoteCheck->kill();
-            m_fcitxRemoteCheck->waitForFinished(500);
-            m_fcitxRemoteCheck->deleteLater();
+            QProcess *previousCheck = m_fcitxRemoteCheck;
+            m_fcitxRemoteCheck = nullptr;
+            previousCheck->disconnect(this);
+            previousCheck->kill();
+            previousCheck->waitForFinished(500);
+            previousCheck->deleteLater();
         }
-        m_fcitxRemoteCheck = new QProcess(this);
+        auto *remoteCheck = new QProcess(this);
+        m_fcitxRemoteCheck = remoteCheck;
         QProcessEnvironment remoteEnv = QProcessEnvironment::systemEnvironment();
         remoteEnv.insert(QStringLiteral("DBUS_SESSION_BUS_ADDRESS"), m_securityQuestionBusAddress);
-        m_fcitxRemoteCheck->setProcessEnvironment(remoteEnv);
-        m_fcitxRemoteCheck->setProgram(QStringLiteral("fcitx-remote"));
-        m_fcitxRemoteCheck->setArguments(QStringList());
+        remoteCheck->setProcessEnvironment(remoteEnv);
+        remoteCheck->setProgram(m_fcitxRemoteExecutable);
+        remoteCheck->setArguments(QStringList());
 
-        connect(m_fcitxRemoteCheck, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, [this]() {
+        connect(remoteCheck, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, [this, remoteCheck]() {
+            const QString state = QString::fromLocal8Bit(remoteCheck->readAllStandardOutput().trimmed());
+            remoteCheck->deleteLater();
+            if (m_fcitxRemoteCheck == remoteCheck) {
+                m_fcitxRemoteCheck = nullptr;
+            }
             if (m_imeStage != 3) return;
-            const QString state = QString::fromLocal8Bit(m_fcitxRemoteCheck->readAllStandardOutput().trimmed());
-            m_fcitxRemoteCheck->deleteLater();
-            m_fcitxRemoteCheck = nullptr;
             if (!state.isEmpty()) {
                 m_imePollTimer->stop();
                 qCInfo(DDE_SHELL) << "Fallback fcitx is reachable, state:" << state;
@@ -288,7 +324,7 @@ void SecurityQuestionManager::continueImeSetup()
             }
         });
 
-        m_fcitxRemoteCheck->start();
+        remoteCheck->start();
         return;
     }
 }
@@ -307,6 +343,7 @@ void SecurityQuestionManager::startHelperAfterIme()
 {
     if (!startSecurityQuestionHelper(m_pendingPayload)) {
         qCWarning(DDE_SHELL) << "Failed to start security question helper process";
+        stopSecurityQuestionIMEInfrastructure();
         resetDialogState();
         return;
     }
@@ -314,6 +351,7 @@ void SecurityQuestionManager::startHelperAfterIme()
     if (!m_securityQuestionHelperProcess) {
         qCWarning(DDE_SHELL) << "Security question helper process is null after start";
         cleanupSecurityQuestionHelper();
+        stopSecurityQuestionIMEInfrastructure();
         resetDialogState();
         return;
     }
@@ -417,10 +455,18 @@ bool SecurityQuestionManager::startSecurityQuestionHelper(const QString &payload
     process->setProcessChannelMode(QProcess::SeparateChannels);
 
     QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-    environment.insert(QStringLiteral("GTK_IM_MODULE"), QStringLiteral("fcitx"));
-    environment.insert(QStringLiteral("QT_IM_MODULE"), QStringLiteral("fcitx"));
-    environment.insert(QStringLiteral("XMODIFIERS"), QStringLiteral("@im=fcitx"));
-    environment.insert(QStringLiteral("INPUT_METHOD"), QStringLiteral("fcitx"));
+
+    // 按系统实际输入法动态决定 IM_MODULE（与 helper 内 detectInputMethodBackend 探测一致）
+    // 仅 fcitx5 时注入 fcitx5，否则回退 fcitx，保证 helper 能加载对应的 Qt 输入法插件
+    QString imModule = QStringLiteral("fcitx");
+    if (!QStandardPaths::findExecutable(QStringLiteral("fcitx5")).isEmpty()) {
+        imModule = QStringLiteral("fcitx5");
+    }
+
+    environment.insert(QStringLiteral("GTK_IM_MODULE"), imModule);
+    environment.insert(QStringLiteral("QT_IM_MODULE"), imModule);
+    environment.insert(QStringLiteral("XMODIFIERS"), QStringLiteral("@im=%1").arg(imModule));
+    environment.insert(QStringLiteral("INPUT_METHOD"), imModule);
 
     if (m_model->appType() != AuthCommon::Lock && !m_securityQuestionBusAddress.isEmpty()) {
         environment.insert(QStringLiteral("DBUS_SESSION_BUS_ADDRESS"), m_securityQuestionBusAddress);
@@ -459,102 +505,23 @@ void SecurityQuestionManager::cleanupSecurityQuestionHelper()
     }
 }
 
-bool SecurityQuestionManager::startSecurityQuestionIMEInfrastructure()
-{
-    stopSecurityQuestionIMEInfrastructure();
-
-    const QString dbusDaemon = QStandardPaths::findExecutable(QStringLiteral("dbus-daemon"));
-    if (dbusDaemon.isEmpty()) {
-        qCWarning(DDE_SHELL) << "dbus-daemon not found, cannot start IME infrastructure";
-        return false;
-    }
-
-    auto *busProcess = new QProcess(this);
-    busProcess->setProcessChannelMode(QProcess::MergedChannels);
-    busProcess->start(dbusDaemon, QStringList()
-                      << QStringLiteral("--session")
-                      << QStringLiteral("--nofork")
-                      << QStringLiteral("--print-address=1"));
-    if (!busProcess->waitForStarted(2000)) {
-        qCWarning(DDE_SHELL) << "Failed to start private session bus:" << busProcess->errorString();
-        delete busProcess;
-        return false;
-    }
-
-    if (!busProcess->waitForReadyRead(2000)) {
-        qCWarning(DDE_SHELL) << "Private session bus did not print address in time";
-        busProcess->terminate();
-        busProcess->waitForFinished(1000);
-        delete busProcess;
-        return false;
-    }
-
-    m_securityQuestionBusAddress = QString::fromLocal8Bit(busProcess->readAllStandardOutput().split('\n').first()).trimmed();
-    if (m_securityQuestionBusAddress.isEmpty()) {
-        qCWarning(DDE_SHELL) << "Private session bus returned empty address";
-        busProcess->terminate();
-        busProcess->waitForFinished(1000);
-        delete busProcess;
-        return false;
-    }
-
-    m_securityQuestionBusProcess = busProcess;
-    qCInfo(DDE_SHELL) << "Started private session bus for IME:" << m_securityQuestionBusAddress
-                       << "original bus:" << QProcessEnvironment::systemEnvironment().value("DBUS_SESSION_BUS_ADDRESS");
-
-    const QString fcitxBin = QStandardPaths::findExecutable(QStringLiteral("fcitx"));
-    if (fcitxBin.isEmpty()) {
-        qCWarning(DDE_SHELL) << "fcitx not found, cannot start fallback IME";
-        stopSecurityQuestionIMEInfrastructure();
-        return false;
-    }
-
-    auto *fcitxProcess = new QProcess(this);
-    QProcessEnvironment fcitxEnv = QProcessEnvironment::systemEnvironment();
-    fcitxEnv.insert(QStringLiteral("DBUS_SESSION_BUS_ADDRESS"), m_securityQuestionBusAddress);
-    fcitxProcess->setProcessEnvironment(fcitxEnv);
-    fcitxProcess->start(fcitxBin, QStringList() << QStringLiteral("-d"));
-    if (!fcitxProcess->waitForStarted(2000)) {
-        qCWarning(DDE_SHELL) << "Failed to start fallback fcitx:" << fcitxProcess->errorString();
-        delete fcitxProcess;
-        stopSecurityQuestionIMEInfrastructure();
-        return false;
-    }
-
-    m_securityQuestionFcitxProcess = fcitxProcess;
-
-    const int maxWaitMs = 5000;
-    const int pollIntervalMs = 300;
-    for (int waited = 0; waited < maxWaitMs; waited += pollIntervalMs) {
-        QThread::msleep(pollIntervalMs);
-        QProcess remoteCheck;
-        QProcessEnvironment remoteEnv = QProcessEnvironment::systemEnvironment();
-        remoteEnv.insert(QStringLiteral("DBUS_SESSION_BUS_ADDRESS"), m_securityQuestionBusAddress);
-        remoteCheck.setProcessEnvironment(remoteEnv);
-        remoteCheck.start(QStringLiteral("fcitx-remote"), QStringList());
-        if (!remoteCheck.waitForStarted(1000) || !remoteCheck.waitForFinished(1000)) {
-            continue;
-        }
-        const QString state = QString::fromLocal8Bit(remoteCheck.readAllStandardOutput().trimmed());
-        if (!state.isEmpty()) {
-            qCInfo(DDE_SHELL) << "Fallback fcitx is reachable after" << waited << "ms, state:" << state;
-            return true;
-        }
-        if (waited == pollIntervalMs) {
-            const QString errOutput = QString::fromLocal8Bit(remoteCheck.readAllStandardError().trimmed());
-            if (!errOutput.isEmpty()) {
-                qCWarning(DDE_SHELL) << "fcitx-remote stderr on first attempt:" << errOutput;
-            }
-        }
-    }
-
-    qCWarning(DDE_SHELL) << "Fallback fcitx did not become reachable within" << maxWaitMs << "ms";
-    return true;
-}
-
 void SecurityQuestionManager::stopSecurityQuestionIMEInfrastructure()
 {
+    if (m_imePollTimer) {
+        m_imePollTimer->stop();
+    }
+
+    if (m_fcitxRemoteCheck) {
+        QProcess *remoteCheck = m_fcitxRemoteCheck;
+        m_fcitxRemoteCheck = nullptr;
+        remoteCheck->disconnect(this);
+        remoteCheck->kill();
+        remoteCheck->waitForFinished(500);
+        remoteCheck->deleteLater();
+    }
+
     if (m_securityQuestionFcitxProcess) {
+        m_securityQuestionFcitxProcess->disconnect(this);
         if (m_securityQuestionFcitxProcess->state() != QProcess::NotRunning) {
             m_securityQuestionFcitxProcess->kill();
             m_securityQuestionFcitxProcess->waitForFinished(1000);
@@ -565,6 +532,7 @@ void SecurityQuestionManager::stopSecurityQuestionIMEInfrastructure()
     }
 
     if (m_securityQuestionBusProcess) {
+        m_securityQuestionBusProcess->disconnect(this);
         if (m_securityQuestionBusProcess->state() != QProcess::NotRunning) {
             m_securityQuestionBusProcess->terminate();
             if (!m_securityQuestionBusProcess->waitForFinished(1000)) {
@@ -577,14 +545,9 @@ void SecurityQuestionManager::stopSecurityQuestionIMEInfrastructure()
         m_securityQuestionBusProcess = nullptr;
     }
 
-    if (m_fcitxRemoteCheck) {
-        m_fcitxRemoteCheck->kill();
-        m_fcitxRemoteCheck->waitForFinished(500);
-        m_fcitxRemoteCheck->deleteLater();
-        m_fcitxRemoteCheck = nullptr;
-    }
-
     m_securityQuestionBusAddress.clear();
+    m_fcitxExecutable.clear();
+    m_fcitxRemoteExecutable.clear();
 }
 
 void SecurityQuestionManager::setFcitxSocketAcl(const QString &user, quint32 uid, bool enable)

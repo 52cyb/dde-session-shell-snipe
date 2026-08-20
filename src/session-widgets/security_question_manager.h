@@ -36,7 +36,6 @@ private:
     QString securityQuestionHelperExecutable() const;
     bool startSecurityQuestionHelper(const QString &payload);
     void cleanupSecurityQuestionHelper();
-    bool startSecurityQuestionIMEInfrastructure();
     void stopSecurityQuestionIMEInfrastructure();
     void setFcitxSocketAcl(const QString &user, quint32 uid, bool enable);
     void onHelperFinished(int exitCode, QProcess::ExitStatus exitStatus);
@@ -53,6 +52,8 @@ private:
     QProcess *m_securityQuestionFcitxProcess = nullptr;
     QProcess *m_fcitxRemoteCheck = nullptr;
     QString m_securityQuestionBusAddress;
+    QString m_fcitxExecutable;
+    QString m_fcitxRemoteExecutable;
     QString m_pendingPayload;
     QTimer *m_imePollTimer = nullptr;
     int m_imeStage = 0;
